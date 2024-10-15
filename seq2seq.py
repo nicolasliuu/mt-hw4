@@ -21,7 +21,7 @@ import matplotlib
 #if you are running on the gradx/ugradx/ another cluster, 
 #you will need the following line
 #if you run on a local machine, you can comment it out
-matplotlib.use('agg') 
+#matplotlib.use('agg') 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import torch
@@ -148,8 +148,24 @@ class EncoderRNN(nn.Module):
         You should make your LSTM modular and re-use it in the Decoder.
         """
         "*** YOUR CODE HERE ***"
-        raise NotImplementedError
-        return output, hidden
+        # Embedding layer converts word indices to embeddings
+        self.embedding = nn.Embedding(input_size, hidden_size)
+
+        # Parameters for the forward LSTM
+        self.W_i_fwd = nn.Linear(hidden_size + hidden_size, hidden_size)
+        self.W_f_fwd = nn.Linear(hidden_size + hidden_size, hidden_size)
+        self.W_c_fwd = nn.Linear(hidden_size + hidden_size, hidden_size)
+        self.W_o_fwd = nn.Linear(hidden_size + hidden_size, hidden_size)
+
+        # Parameters for the backward LSTM
+        self.W_i_bwd = nn.Linear(hidden_size + hidden_size, hidden_size)
+        self.W_f_bwd = nn.Linear(hidden_size + hidden_size, hidden_size)
+        self.W_c_bwd = nn.Linear(hidden_size + hidden_size, hidden_size)
+        self.W_o_bwd = nn.Linear(hidden_size + hidden_size, hidden_size)
+        # Repeat for backward direction if necessary
+
+        # raise NotImplementedError
+        #return output, hidden
 
 
     def forward(self, input, hidden):
@@ -157,8 +173,54 @@ class EncoderRNN(nn.Module):
         returns the output and the hidden state
         """
         "*** YOUR CODE HERE ***"
-        raise NotImplementedError
-        return output, hidden
+
+        embedded = self.embedding(input) # Shape: (seq_len, 1, hidden_size)
+        seq_len = embedded.size(0)
+
+        # Initialize outputs and hidden states
+        outputs = torch.zeros(seq_len, self.hidden_size * 2, device=device)
+
+
+        # Forward LSTM
+        h_fwd = torch.zeros(1, self.hidden_size, device=device)
+        c_fwd = torch.zeros(1, self.hidden_size, device=device)
+        for ei in range(seq_len):
+            embedded_ei = embedded[ei]  # Shape: (1, hidden_size)
+            combined = torch.cat((embedded_ei, h_fwd), 1)  # Shape: (1, 2 * hidden_size)
+            i_t = torch.sigmoid(self.W_i_fwd(combined))
+            f_t = torch.sigmoid(self.W_f_fwd(combined))
+            g_t = torch.tanh(self.W_c_fwd(combined))
+            o_t = torch.sigmoid(self.W_o_fwd(combined))
+            c_fwd = f_t * c_fwd + i_t * g_t
+            h_fwd = o_t * torch.tanh(c_fwd)
+
+        outputs[ei, :self.hidden_size] = h_fwd.squeeze(0)
+
+        # Backward LSTM
+        h_bwd = torch.zeros(1, self.hidden_size, device=device)
+        c_bwd = torch.zeros(1, self.hidden_size, device=device)
+        for ei in reversed(range(seq_len)):
+            embedded_ei = embedded[ei]  # Shape: (1, hidden_size)
+            combined = torch.cat((embedded_ei, h_bwd), 1)
+            i_t = torch.sigmoid(self.W_i_bwd(combined))
+            f_t = torch.sigmoid(self.W_f_bwd(combined))
+            g_t = torch.tanh(self.W_c_bwd(combined))
+            o_t = torch.sigmoid(self.W_o_bwd(combined))
+            c_bwd = f_t * c_bwd + i_t * g_t
+            h_bwd = o_t * torch.tanh(c_bwd)
+            
+            # Store the hidden state at each time step
+            outputs[ei, self.hidden_size:] = h_bwd.squeeze(0)
+
+
+        # Concatenate forward and backward hidden states
+        # Concatenate the last hidden states from forward and backward passes
+        final_hidden = torch.cat((h_fwd, h_bwd), 1)  # Shape: (1, 2 * hidden_size)
+        return outputs, final_hidden
+
+
+        # raise NotImplementedError
+        # return output, hidden
 
     def get_initial_hidden_state(self):
         return torch.zeros(1, 1, self.hidden_size, device=device)
@@ -169,6 +231,7 @@ class AttnDecoderRNN(nn.Module):
     """
     def __init__(self, hidden_size, output_size, dropout_p=0.1, max_length=MAX_LENGTH):
         super(AttnDecoderRNN, self).__init__()
+        self.hidden_init = nn.Linear(2 * hidden_size, hidden_size)
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.dropout_p = dropout_p
@@ -179,9 +242,26 @@ class AttnDecoderRNN(nn.Module):
         """Initilize your word embedding, decoder LSTM, and weights needed for your attention here
         """
         "*** YOUR CODE HERE ***"
-        raise NotImplementedError
 
-        self.out = nn.Linear(self.hidden_size, self.output_size)
+        # Embedding layer
+        self.embedding = nn.Embedding(output_size, hidden_size)
+        self.dropout = nn.Dropout(self.dropout_p)
+
+        # LSTM parameters (unidirectional)
+        self.W_i = nn.Linear(hidden_size + hidden_size, hidden_size)
+        self.W_f = nn.Linear(hidden_size + hidden_size, hidden_size)
+        self.W_c = nn.Linear(hidden_size + hidden_size, hidden_size)
+        self.W_o = nn.Linear(hidden_size + hidden_size, hidden_size)
+
+        # Attention mechanism
+        self.attn = nn.Linear(self.hidden_size + hidden_size, max_length)
+        self.attn_combine = nn.Linear(self.hidden_size * 2, hidden_size)
+
+        # Output layer
+        self.out = nn.Linear(hidden_size, output_size)
+
+        # raise NotImplementedError
+        # self.out = nn.Linear(self.hidden_size, self.output_size)
 
     def forward(self, input, hidden, encoder_outputs):
         """runs the forward pass of the decoder
@@ -191,8 +271,35 @@ class AttnDecoderRNN(nn.Module):
         """
         
         "*** YOUR CODE HERE ***"
-        raise NotImplementedError
-        return log_softmax, hidden, attn_weights
+
+        embedded = self.embedding(input).view(1, 1, -1)
+        embedded = self.dropout(embedded)
+
+        # Calculate attention weights and apply to encoder outputs
+        attn_weights = F.softmax(
+            self.attn(torch.cat((embedded[0], hidden), 1)), dim=1)  # (1, max_length)
+        attn_applied = torch.bmm(attn_weights.unsqueeze(0),
+                                 encoder_outputs.unsqueeze(0))  # (1, 1, hidden_size * 2)
+
+        # Combine embedded input word and attended context
+        output = torch.cat((embedded[0], attn_applied[0]), 1)  # (1, hidden_size * 3)
+        output = self.attn_combine(output).unsqueeze(0)  # (1, 1, hidden_size)
+
+        # Pass through LSTM
+        combined = torch.cat((output[0], hidden), 1)  # (1, hidden_size + hidden_size)
+        i_t = torch.sigmoid(self.W_i(combined))
+        f_t = torch.sigmoid(self.W_f(combined))
+        g_t = torch.tanh(self.W_c(combined))
+        o_t = torch.sigmoid(self.W_o(combined))
+
+        c_t = f_t * hidden + i_t * g_t  # Assuming hidden is c_{t-1}
+        h_t = o_t * torch.tanh(c_t)
+
+        output = F.log_softmax(self.out(h_t), dim=1)  # (1, output_size)
+        return output, c_t, attn_weights  # Return c_t as the new hidden state
+
+        # raise NotImplementedError
+        # return log_softmax, hidden, attn_weights
 
     def get_initial_hidden_state(self):
         return torch.zeros(1, 1, self.hidden_size, device=device)
@@ -208,9 +315,57 @@ def train(input_tensor, target_tensor, encoder, decoder, optimizer, criterion, m
     decoder.train()
 
     "*** YOUR CODE HERE ***"
-    raise NotImplementedError
 
-    return loss.item() 
+    optimizer.zero_grad()
+
+    input_length = input_tensor.size(0)
+    target_length = target_tensor.size(0)
+
+    # Initialize encoder outputs
+    encoder_outputs = torch.zeros(max_length, encoder.hidden_size * 2, device=device)
+
+    loss = 0
+
+    # Encode input sequence
+    encoder_output, encoder_hidden = encoder(input_tensor, encoder_hidden)
+    encoder_outputs[:encoder_output.size(0)] = encoder_output.squeeze(1)
+
+    # Initialize decoder input and hidden state
+    decoder_input = torch.tensor([[SOS_index]], device=device)
+    decoder_hidden = encoder_hidden  # Use the encoder's final hidden state as the initial hidden state
+
+    # Teacher forcing ratio
+    teacher_forcing_ratio = 0.5
+    use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
+
+    if use_teacher_forcing:
+        # Teacher forcing: Feed the target as the next input
+        for di in range(target_length):
+            decoder_output, decoder_hidden, decoder_attention = decoder(
+                decoder_input, decoder_hidden, encoder_outputs)
+            loss += criterion(decoder_output, target_tensor[di])
+            decoder_input = target_tensor[di]  # Teacher forcing
+    else:
+        # Without teacher forcing: use its own predictions as the next input
+        for di in range(target_length):
+            decoder_output, decoder_hidden, decoder_attention = decoder(
+                decoder_input, decoder_hidden, encoder_outputs)
+            topv, topi = decoder_output.topk(1)
+            decoder_input = topi.squeeze().detach()  # Detach from history as input
+
+            loss += criterion(decoder_output, target_tensor[di])
+            if decoder_input.item() == EOS_index:
+                break
+
+    loss.backward()
+    optimizer.step()
+
+    return loss.item() / target_length
+
+
+    # raise NotImplementedError
+
+    # return loss.item() 
 
 
 
@@ -298,7 +453,27 @@ def show_attention(input_sentence, output_words, attentions):
     """
     
     "*** YOUR CODE HERE ***"
-    raise NotImplementedError
+
+        # Set up figure with colorbar
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    # Convert attention to numpy array
+    attentions = attentions.squeeze(1).cpu().numpy()
+    cax = ax.matshow(attentions, cmap='bone')
+
+    fig.colorbar(cax)
+
+    # Set up axes
+    ax.set_xticklabels([''] + input_sentence.split(' ') + [EOS_token], rotation=90)
+    ax.set_yticklabels([''] + output_words)
+
+    # Show label at every tick
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
+    ax.yaxis.set_major_locator(ticker.MultipleLocator(1))
+
+    plt.savefig('attention_plot.png')
+    plt.close()
+    #raise NotImplementedError
 
 
 def translate_and_show_attention(input_sentence, encoder1, decoder1, src_vocab, tgt_vocab):
