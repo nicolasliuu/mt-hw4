@@ -184,9 +184,12 @@ def translate(encoder, decoder, sentence, src_vocab, tgt_vocab, max_length=MAX_L
     decoder_hidden = encoder_hidden
 
     decoded_words = []
+    attentions = torch.zeros(max_length, max_length)  # Store attention weights
+
     for di in range(max_length):
-        decoder_output, decoder_hidden, _ = decoder(
+        decoder_output, decoder_hidden, attn_weights = decoder(
             decoder_input, decoder_hidden, encoder_outputs)
+        attentions[di] = attn_weights.data  # Save attention weights
         topv, topi = decoder_output.data.topk(1)
         if topi.item() == EOS_index:
             decoded_words.append(EOS_token)
@@ -196,17 +199,17 @@ def translate(encoder, decoder, sentence, src_vocab, tgt_vocab, max_length=MAX_L
 
         decoder_input = topi.squeeze().detach()
 
-    return decoded_words
+    return decoded_words, attentions  # Return both output words and attention weights
+
 
 
 def translate_sentences(encoder, decoder, pairs, src_vocab, tgt_vocab, max_num_sentences=None, max_length=MAX_LENGTH):
     output_sentences = []
     for pair in pairs[:max_num_sentences]:
-        output_words = translate(encoder, decoder, pair[0], src_vocab, tgt_vocab)
+        output_words, attentions = translate(encoder, decoder, pair[0], src_vocab, tgt_vocab)  # Now it correctly unpacks both values
         output_sentence = ' '.join(output_words)
         output_sentences.append(output_sentence)
     return output_sentences
-
 
 def translate_random_sentence(encoder, decoder, pairs, src_vocab, tgt_vocab, n=1):
     for i in range(n):
@@ -251,7 +254,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--hidden_size', default=256, type=int,
                     help='hidden size of encoder/decoder, also word vector size')
-    ap.add_argument('--n_iters', default=4999, type=int,
+    ap.add_argument('--n_iters', default= 10000, type=int,
                     help='total number of examples to train on')
     ap.add_argument('--print_every', default=5000, type=int,
                     help='print loss info every this many training examples')
