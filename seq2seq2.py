@@ -254,7 +254,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--hidden_size', default=256, type=int,
                     help='hidden size of encoder/decoder, also word vector size')
-    ap.add_argument('--n_iters', default= 10000, type=int,
+    ap.add_argument('--n_iters', default= 100000, type=int,
                     help='total number of examples to train on')
     ap.add_argument('--print_every', default=5000, type=int,
                     help='print loss info every this many training examples')
